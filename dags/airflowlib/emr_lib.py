@@ -39,7 +39,7 @@ def get_security_group_id_vpc(group_name, region_name):
     groupId = next((x['GroupId'] for x in response['SecurityGroups'] if x['GroupName'] == group_name), None)
     return groupId
 
-def create_cluster(region_name, cluster_name='Airflow-' + str(datetime.now()), release_label='emr-5.9.0',master_instance_type='m3.xlarge', num_core_nodes=2, core_node_instance_type='m3.2xlarge'):
+def create_cluster(region_name, cluster_name='Airflow-' + str(datetime.now()), release_label='emr-5.16.0',master_instance_type='m3.xlarge', num_core_nodes=2, core_node_instance_type='m3.2xlarge'):
     emr_master_security_group_id = get_security_group_id_vpc('AirflowEMRMasterSG', region_name=region_name)
     emr_slave_security_group_id = get_security_group_id_vpc('AirflowEMRSlaveSG', region_name=region_name)
     subnet_id = get_subnet()
