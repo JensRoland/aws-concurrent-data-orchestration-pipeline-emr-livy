@@ -3,6 +3,18 @@ AWSTemplateFormatVersion: '2010-09-09'
 Description: Airflow server backed by Postgres RDS
 
 Parameters:
+  VPCID:
+    Description: An existing VPC
+    Type: AWS::EC2::VPC::Id
+    ConstraintDescription: Must be an existing VPC
+  SubnetID:
+    Description: Name of an existing VPC subnet
+    Type: AWS::EC2::Subnet::Id
+    ConstraintDescription: Must be the name of an existing VPC subnet
+  DBSubnetGroup:
+    Description: Name of an existing DB Subnet Group
+    Type: String
+    ConstraintDescription: Must be the name of an existing DB Subnet Group
   KeyName:
     Description: Name of an existing EC2 KeyPair to enable SSH access into the Airflow web server
     Type: AWS::EC2::KeyPair::KeyName
@@ -59,7 +71,8 @@ Resources:
     Type: AWS::EC2::Instance
     Properties:
       KeyName: !Ref 'KeyName'
-      SecurityGroups: [!Ref 'AirflowEC2SecurityGroup']
+      SubnetId: !Ref 'SubnetID'
+      SecurityGroupIds: [!Ref 'AirflowEC2SecurityGroup']
       InstanceType: 'm4.xlarge'
       IamInstanceProfile:
         Ref: EC2InstanceProfile
@@ -86,21 +99,23 @@ Resources:
          # Upload the movielens dataset files to the S3 bucket
          aws s3 cp ml-latest s3://${S3BucketName} --recursive
          # Install git
-         sudo yum install -y git
+         yum install -y git
          # Clone the git repository
          git clone https://github.com/aws-samples/aws-concurrent-data-orchestration-pipeline-emr-livy.git
-         sudo pip install boto3
+         pip install boto3
          # Install airflow using pip
          echo "Install Apache Airflow"
-         sudo pip install apache-airflow
+         export SLUGIFY_USES_TEXT_UNIDECODE=yes
+         pip install apache-airflow
          # Encrypt connection passwords in metadata db
-         sudo pip install apache-airflow[crypto]
+         pip install apache-airflow[crypto]
          # Postgres operators and hook, support as an Airflow backend
-         sudo pip install apache-airflow[postgres]
-         sudo -H pip install six==1.10.0
-         sudo pip install --upgrade six
-         sudo pip install markupsafe
-         sudo pip install --upgrade MarkupSafe
+         pip install apache-airflow[postgres]
+         -H pip install six==1.10.0
+         pip install --upgrade six
+         pip install markupsafe
+         pip install --upgrade MarkupSafe
+         # Set up environment
          echo 'export PATH=/usr/local/bin:$PATH' >> /root/.bash_profile
          source /root/.bash_profile
          # Initialize Airflow
@@ -132,23 +147,12 @@ Resources:
     DependsOn:
       - DBInstance
       - AirflowEC2SecurityGroup
-  DBInstance:
-    Type: AWS::RDS::DBInstance
-    DeletionPolicy: Delete
-    Properties:
-      DBName: airflowdb
-      Engine: postgres
-      MasterUsername: airflow
-      MasterUserPassword: !Ref 'DBPassword'
-      DBInstanceClass: db.t2.small
-      AllocatedStorage: 5
-      DBSecurityGroups:
-        - Ref: DBSecurityGroup
   AirflowEC2SecurityGroup:
     Type: AWS::EC2::SecurityGroup
     Properties:
       GroupName: AirflowEC2SG
       GroupDescription: Enable HTTP access via port 80 + SSH access
+      VpcId: !Ref 'VPCID'
       SecurityGroupIngress:
         - IpProtocol: tcp
           FromPort: 80
@@ -162,33 +166,52 @@ Resources:
           FromPort: 22
           ToPort: 22
           CidrIp: 0.0.0.0/0
+  VPCSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: AirflowVPCSG
+      GroupDescription: Frontend Access
+      VpcId: !Ref 'VPCID'
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 5432
+          ToPort: 5432
+          SourceSecurityGroupId: !Ref 'AirflowEC2SecurityGroup'
+  DBInstance:
+    Type: AWS::RDS::DBInstance
+    DeletionPolicy: Delete
+    Properties:
+      DBName: airflowdb
+      DBSubnetGroupName: !Ref 'DBSubnetGroup'
+      Engine: postgres
+      MasterUsername: airflow
+      MasterUserPassword: !Ref 'DBPassword'
+      DBInstanceClass: db.t2.small
+      AllocatedStorage: 5
+      VPCSecurityGroups:
+        - Ref: VPCSecurityGroup
   AirflowEMRMasterEC2SecurityGroup:
     Type: AWS::EC2::SecurityGroup
     Properties:
       GroupName: AirflowEMRMasterSG
       GroupDescription: Airflow EMR Master SG
+      VpcId: !Ref 'VPCID'
     DependsOn:
       - AirflowEC2SecurityGroup
   AirflowEMRMasterInboundRule:
     Type: AWS::EC2::SecurityGroupIngress
     Properties:
       IpProtocol: tcp
-      FromPort: '8998'
-      ToPort: '8998'
-      SourceSecurityGroupName: !Ref 'AirflowEC2SecurityGroup'
-      GroupName: !Ref 'AirflowEMRMasterEC2SecurityGroup'
+      FromPort: 8998
+      ToPort: 8998
+      SourceSecurityGroupId: !Ref 'AirflowEC2SecurityGroup'
+      GroupId: !Ref 'AirflowEMRMasterEC2SecurityGroup'
   AirflowEMRSlaveEC2SecurityGroup:
     Type: AWS::EC2::SecurityGroup
     Properties:
       GroupName: AirflowEMRSlaveSG
       GroupDescription: Airflow EMR Slave SG
-  DBSecurityGroup:
-    Type: AWS::RDS::DBSecurityGroup
-    Properties:
-      GroupDescription: Frontend Access
-      DBSecurityGroupIngress:
-        EC2SecurityGroupName:
-          Ref: AirflowEC2SecurityGroup
+      VpcId: !Ref 'VPCID'
   EC2Role:
     Type: AWS::IAM::Role
     Properties:
@@ -264,4 +287,4 @@ Resources:
 Outputs:
   AirflowEC2PublicDNSName:
     Description: Public DNS Name of the Airflow EC2 instance
-    Value: !Join ["", ["http://", !GetAtt EC2Instance.PublicDnsName, ":8080"]]
+    Value: !Join ["", ["http://", !GetAtt EC2Instance.PrivateDnsName, ":8080"]]
