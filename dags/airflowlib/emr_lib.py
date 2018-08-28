@@ -1,4 +1,4 @@
-import boto3, json, pprint, requests, textwrap, time, logging, requests
+import boto3, json, pprint, requests, textwrap, time, logging
 from datetime import datetime
 
 def get_region():
@@ -10,14 +10,41 @@ def client(region_name):
     global emr
     emr = boto3.client('emr', region_name=region_name)
 
+def get_vpc_id():
+    mac = requests.get("http://169.254.169.254/latest/meta-data/network/interfaces/macs/").text
+    vpc_id = requests.get("http://169.254.169.254/latest/meta-data/network/interfaces/macs/{}/vpc-id".format(mac)).text
+    return vpc_id
+
+def get_subnet():
+    mac = requests.get("http://169.254.169.254/latest/meta-data/network/interfaces/macs/").text
+    subnet = requests.get("http://169.254.169.254/latest/meta-data/network/interfaces/macs/{}/subnet-id".format(mac)).text
+    return subnet
+
+def get_keyname():
+    keys = requests.get("http://169.254.169.254/latest/meta-data/public-keys/").text
+    first_key = keys.split('\n')[0].split('=')[1]
+    return first_key
+
 def get_security_group_id(group_name, region_name):
     ec2 = boto3.client('ec2', region_name=region_name)
     response = ec2.describe_security_groups(GroupNames=[group_name])
     return response['SecurityGroups'][0]['GroupId']
 
+def get_security_group_id_vpc(group_name, region_name):
+    ec2client = boto3.client('ec2', region_name=region_name)
+    ec2 = boto3.resource('ec2', region_name=region_name)
+    vpc = ec2.Vpc(get_vpc_id())
+    vpcSecurityGroupIds = [s.id for s in vpc.security_groups.all()]
+    response = ec2client.describe_security_groups(GroupIds=vpcSecurityGroupIds)
+    groupId = next((x['GroupId'] for x in response['SecurityGroups'] if x['GroupName'] == group_name), None)
+    return groupId
+
 def create_cluster(region_name, cluster_name='Airflow-' + str(datetime.now()), release_label='emr-5.9.0',master_instance_type='m3.xlarge', num_core_nodes=2, core_node_instance_type='m3.2xlarge'):
-    emr_master_security_group_id = get_security_group_id('AirflowEMRMasterSG', region_name=region_name)
-    emr_slave_security_group_id = get_security_group_id('AirflowEMRSlaveSG', region_name=region_name)
+    emr_master_security_group_id = get_security_group_id_vpc('AirflowEMRMasterSG', region_name=region_name)
+    emr_slave_security_group_id = get_security_group_id_vpc('AirflowEMRSlaveSG', region_name=region_name)
+    subnet_id = get_subnet()
+    cluster_keyname=get_keyname()
+
     cluster_response = emr.run_job_flow(
         Name=cluster_name,
         ReleaseLabel=release_label,
@@ -38,8 +65,9 @@ def create_cluster(region_name, cluster_name='Airflow-' + str(datetime.now()), r
                     'InstanceCount': num_core_nodes
                 }
             ],
+            'Ec2SubnetId': subnet_id,
             'KeepJobFlowAliveWhenNoSteps': True,
-            'Ec2KeyName' : 'airflow_key_pair',
+            'Ec2KeyName' : cluster_keyname,
             'EmrManagedMasterSecurityGroup': emr_master_security_group_id,
             'EmrManagedSlaveSecurityGroup': emr_slave_security_group_id
         },
